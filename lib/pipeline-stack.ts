@@ -1,7 +1,8 @@
 import { Artifact } from "@aws-cdk/aws-codepipeline";
 import { GitHubSourceAction } from "@aws-cdk/aws-codepipeline-actions";
-import { Stack, Construct, StackProps, SecretValue } from "@aws-cdk/core";
+import { Stack, Construct, StackProps, SecretValue, Aws } from "@aws-cdk/core";
 import { CdkPipeline } from "@aws-cdk/pipelines";
+import { AppsyncStage } from "./appsync-stage";
 
 export class Pipeline extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -22,5 +23,11 @@ export class Pipeline extends Stack {
         repo: "graphql-api",
       }),
     });
+
+    pipeline.addApplicationStage(
+      new AppsyncStage(this, "Dev", {
+        env: { account: Aws.ACCOUNT_ID, region: Aws.REGION },
+      })
+    );
   }
 }
