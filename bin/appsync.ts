@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-import 'source-map-support/register';
-import * as cdk from '@aws-cdk/core';
-import { AppsyncStack } from '../lib/appsync-stack';
+import { App, Aws } from "@aws-cdk/core";
+import { Pipeline } from "../lib/pipeline-stack";
 
-const app = new cdk.App();
-new AppsyncStack(app, 'AppsyncStack');
+const app = new App();
+
+new Pipeline(app, "Pipeline", {
+  env: { account: Aws.ACCOUNT_ID, region: Aws.REGION },
+});
+
+app.synth();
