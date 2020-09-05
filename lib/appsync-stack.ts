@@ -23,23 +23,28 @@ export class AppsyncStack extends Stack {
 
     const tableName = "items";
 
-    const itemsGraphQLApi = new CfnGraphQLApi(this, "itemsApi", {
+    const itemsGraphQLApi = new CfnGraphQLApi(this, "ItemsApi", {
       name: "items-api",
-      authenticationType: AuthorizationType.API_KEY,
+      authenticationType: "API_KEY",
     });
 
-    new CfnApiKey(this, "apiKey", {
+    new CfnApiKey(this, "ItemsApiKey", {
       apiId: itemsGraphQLApi.attrApiId,
     });
 
-    const apiSchema = new CfnGraphQLSchema(this, "itemsSchema", {
+    const apiSchema = new CfnGraphQLSchema(this, "ItemsSchema", {
       apiId: itemsGraphQLApi.attrApiId,
       definition: `type ${tableName} {
         ${tableName}Id: ID!
         name: String
       }
+      type Paginated${tableName} {
+        items: [${tableName}!]!
+        nextToken: String
+      }
       type Query {
-        all(): ${tableName}
+        all(limit: Int, nextToken: String): Paginated${tableName}!
+        getOne(${tableName}Id: ID!): ${tableName}
       }
       type Mutation {
         save(name: String!): ${tableName}
@@ -51,18 +56,22 @@ export class AppsyncStack extends Stack {
       }`,
     });
 
-    const itemsTable = new Table(this, "itemsTable", {
-      tableName,
+    const itemsTable = new Table(this, "ItemsTable", {
+      tableName: tableName,
       partitionKey: {
         name: `${tableName}Id`,
         type: AttributeType.STRING,
       },
       billingMode: BillingMode.PAY_PER_REQUEST,
       stream: StreamViewType.NEW_IMAGE,
-      removalPolicy: RemovalPolicy.DESTROY,
+
+      // The default removal policy is RETAIN, which means that cdk destroy will not attempt to delete
+      // the new table, and it will remain in your account until manually deleted. By setting the policy to
+      // DESTROY, cdk destroy will delete the table (even if it has data in it)
+      removalPolicy: RemovalPolicy.DESTROY, // NOT recommended for production code
     });
 
-    const itemsTableRole = new Role(this, "itemsDynamoDBRole", {
+    const itemsTableRole = new Role(this, "ItemsDynamoDBRole", {
       assumedBy: new ServicePrincipal("appsync.amazonaws.com"),
     });
 
@@ -70,9 +79,9 @@ export class AppsyncStack extends Stack {
       ManagedPolicy.fromAwsManagedPolicyName("AmazonDynamoDBFullAccess")
     );
 
-    const datasource = new CfnDataSource(this, "itemsDataSource", {
+    const dataSource = new CfnDataSource(this, "ItemsDataSource", {
       apiId: itemsGraphQLApi.attrApiId,
-      name: "itemsDynamoDataSource",
+      name: "ItemsDynamoDataSource",
       type: "AMAZON_DYNAMODB",
       dynamoDbConfig: {
         tableName: itemsTable.tableName,
@@ -81,14 +90,32 @@ export class AppsyncStack extends Stack {
       serviceRoleArn: itemsTableRole.roleArn,
     });
 
-    const getAllResolver = new CfnResolver(this, "getAllQueryResolver", {
+    const getOneResolver = new CfnResolver(this, "GetOneQueryResolver", {
+      apiId: itemsGraphQLApi.attrApiId,
+      typeName: "Query",
+      fieldName: "getOne",
+      dataSourceName: dataSource.name,
+      requestMappingTemplate: `{
+        "version": "2017-02-28",
+        "operation": "GetItem",
+        "key": {
+          "${tableName}Id": $util.dynamodb.toDynamoDBJson($ctx.args.${tableName}Id)
+        }
+      }`,
+      responseMappingTemplate: `$util.toJson($ctx.result)`,
+    });
+    getOneResolver.addDependsOn(apiSchema);
+
+    const getAllResolver = new CfnResolver(this, "GetAllQueryResolver", {
       apiId: itemsGraphQLApi.attrApiId,
       typeName: "Query",
       fieldName: "all",
-      dataSourceName: datasource.name,
+      dataSourceName: dataSource.name,
       requestMappingTemplate: `{
         "version": "2017-02-28",
-        "operation": "Scan"
+        "operation": "Scan",
+        "limit": $util.defaultIfNull($ctx.args.limit, 20),
+        "nextToken": $util.toJson($util.defaultIfNullOrEmpty($ctx.args.nextToken, null))
       }`,
       responseMappingTemplate: `$util.toJson($ctx.result)`,
     });
@@ -98,7 +125,7 @@ export class AppsyncStack extends Stack {
       apiId: itemsGraphQLApi.attrApiId,
       typeName: "Mutation",
       fieldName: "save",
-      dataSourceName: datasource.name,
+      dataSourceName: dataSource.name,
       requestMappingTemplate: `{
         "version": "2017-02-28",
         "operation": "PutItem",
@@ -117,7 +144,7 @@ export class AppsyncStack extends Stack {
       apiId: itemsGraphQLApi.attrApiId,
       typeName: "Mutation",
       fieldName: "delete",
-      dataSourceName: datasource.name,
+      dataSourceName: dataSource.name,
       requestMappingTemplate: `{
         "version": "2017-02-28",
         "operation": "DeleteItem",
@@ -128,5 +155,7 @@ export class AppsyncStack extends Stack {
       responseMappingTemplate: `$util.toJson($ctx.result)`,
     });
     deleteResolver.addDependsOn(apiSchema);
+
+    this.url = itemsGraphQLApi.attrGraphQlUrl;
   }
 }
